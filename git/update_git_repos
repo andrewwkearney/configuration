@@ -1,0 +1,123 @@
+#!/usr/bin/env sh
+# Usages:
+#   ./update_git_repos.sh [parent_directory]
+#   Example usage
+#       ./update_git_repos.sh ~/repos/
+
+
+script_string="update_git_repo:"
+directory_to_update="$1"
+count=0
+
+updateRepo() {
+    local dir="$1"
+    cd $dir
+
+    echo "************************************************************"
+    echo "    $dir"
+    echo "************************************************************"
+
+    # Determine the default branch
+    remote=$(git remote)
+    if [ -z $(git config default.branch ) ]; then
+        setDefaultBranchIfNotSet $remote
+    fi
+    
+    default_branch=$(git config default.branch)
+    echo "$script_string Default branch is '$default_branch'"
+    
+    # Skip repo with unkown default branch
+    if [ "$default_branch" == "(unknown)" ]; then
+        echo "$script_string Skipping $dir as default branch unknown, probably an empty repo"
+        return
+    fi
+
+    # Basic repo details
+    repo_url=$(git config --get remote.origin.url)
+    current_branch=$(git rev-parse --abbrev-ref HEAD)
+    working_directory_clean=true
+
+    echo "$script_string $dir with URL: $repo_url"
+    echo "$script_string Starting update in $PWD"
+
+    # Stash changes if working directory not clean
+    workingDirectoryCheck $working_directory_clean
+
+    # Checkout default branch if we aren't there
+    defaultBranchCheck $current_branch $default_branch
+
+    # Update repo
+    gitUpdate
+
+    # Reset working directory back to original state
+    resetBranch $current_branch $default_branch
+    resetState $working_directory_clean
+}
+
+setDefaultBranchIfNotSet() {
+    local $remote="$1"
+    echo "$script_string No default branch set"
+    default_branch=$(git remote show $remote | sed -n '/HEAD branch/s/.*: //p')
+    echo "$script_string Setting default.branch to '$default_branch'"
+    git config default.branch $default_branch
+}
+
+workingDirectoryCheck() {
+    if [ -z $(git status --porcelain) ]; then
+        echo "$script_string Working directory clean"
+    else
+        echo "$script_string Working directory dirty"
+        working_directory_clean=false
+        git stash push --message "Stashing from update_git_repos script" --quiet
+    fi
+}
+
+defaultBranchCheck() {
+    local current_branch="$1"
+    local default_branch="$2"
+    if [ "$current_branch" != "$default_branch" ]; then
+        echo "$script_string Current branch is $current_branch, checking out $default_branch"
+        git checkout $default_branch --quiet
+    else
+        echo "$script_string Current branch '$current_branch' is the default"
+    fi
+}
+
+gitUpdate() {
+    echo "$script_string Updating repo by calling git up"
+    git remote update -p; git merge --ff-only @{u} --quiet
+    # echo "\n"
+}
+
+resetBranch() {
+    local current_branch="$1"
+    local default_branch="$2"
+    if [ "$current_branch" != "$default_branch" ]; then
+        echo "$script_string Checking out $current_branch"
+        git checkout $current_branch --quiet
+    fi
+}
+
+resetState() {
+    local clean="$1"
+    if [ "$clean" = false ]; then
+        echo "$script_string Unstashing changes"
+        git stash pop --quiet
+    fi
+}
+
+if [ -z "$directory_to_update" ] ; then
+    echo "No directory provided, exiting." >&2
+    exit 3
+fi
+
+TIMEFORMAT="$script_string $count local Git repos have been updated in %2R seconds!"
+time {
+    echo "$script_string Updating git repo's in directory: $directory_to_update"
+
+    for dir in $(find $directory_to_update -maxdepth 4 -type d -name .git | xargs -n 1 dirname); do
+        updateRepo $dir $directory_to_update #& #uncomment to make it run in multiple threads
+        ((count= count + 1))
+    done
+}
+
